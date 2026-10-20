@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Default: Enforce HTTPS/TLS for all external network requests -->
+    <base-config cleartextTrafficPermitted="false" />
+
+    <!-- Allow local loopback HTTP strictly for 127.0.0.1 / localhost local agent server -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

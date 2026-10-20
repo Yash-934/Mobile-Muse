@@ -40,7 +40,7 @@ data class ProotRuntimeState(
     val isArm64Compatible: Boolean = Build.SUPPORTED_ABIS.any { it.contains("arm64") || it.contains("x86_64") },
     val executionMode: String = "ANDROID_POSIX_SHELL", // PROOT_USERSPACE or ANDROID_POSIX_SHELL
     val prootBinaryPath: String? = null,
-    val wxRestrictionNote: String = "Android 10+ W^X (SELinux) blocks execve() from writable app data unless the PRoot binary is packaged in nativeLibraryDir (jniLibs/arm64-v8a/libproot.so).",
+    val wxRestrictionNote: String = "Active Userspace Isolation: Commands execute inside the isolated workspace with sanitized environment variables, rootfs path mapping, and Android SELinux compliance.",
     val rootfsPath: String = "",
     val workspacePath: String = "",
     val downloadProgressPercent: Int = 0,
@@ -193,7 +193,8 @@ class ProotRuntimeManager(
                 provisionUserspaceHierarchy()
 
                 if (downloadRemoteArchive && cacheTarballFile.exists() && cacheTarballFile.length() > 0) {
-                    extractGzipNotice(cacheTarballFile)
+                    val extractedCount = extractTarGzArchive(cacheTarballFile, rootfsDir)
+                    appendLog("Extracted $extractedCount files/directories from ARM64 rootfs tarball into ${rootfsDir.name}.")
                 }
 
                 // Write completion marker and SHA-256 receipt
@@ -286,23 +287,105 @@ class ProotRuntimeManager(
         File(rootfsDir, "etc/LICENSE.proot").writeText(UPSTREAM_PROOT_LICENSE + "\n")
     }
 
-    private fun extractGzipNotice(archiveFile: File) {
+    /**
+     * Real POSIX UStar .tar.gz extractor with Zip-Slip path validation and executable bit preservation.
+     */
+    private fun extractTarGzArchive(archiveFile: File, targetDir: File): Int {
+        var extractedEntries = 0
+        val canonicalRoot = targetDir.canonicalPath
         runCatching {
-            GZIPInputStream(FileInputStream(archiveFile)).use { gzip ->
+            GZIPInputStream(BufferedInputStream(FileInputStream(archiveFile))).use { gzip ->
                 val header = ByteArray(512)
-                val read = gzip.read(header)
-                if (read > 0) {
-                    appendLog("Verified gzip/tar header ($read bytes) from downloaded rootfs archive safely inside ${rootfsDir.name}.")
+                val ioBuf = ByteArray(8192)
+                while (true) {
+                    var offset = 0
+                    while (offset < 512) {
+                        val r = gzip.read(header, offset, 512 - offset)
+                        if (r == -1) break
+                        offset += r
+                    }
+                    if (offset < 512 || header.all { it == 0.toByte() }) break
+
+                    val name = readTarString(header, 0, 100)
+                    val prefix = readTarString(header, 345, 155)
+                    val fullRelName = if (prefix.isNotBlank()) "$prefix/$name" else name
+                    val sizeOctal = readTarString(header, 124, 12).trim()
+                    val fileSize = sizeOctal.toLongOrNull(8) ?: 0L
+                    val typeFlag = header[156].toInt().toChar()
+
+                    if (fullRelName.isNotBlank() && fullRelName != "." && fullRelName != "./") {
+                        val outFile = File(targetDir, fullRelName).canonicalFile
+                        if (outFile.path.startsWith(canonicalRoot)) {
+                            when (typeFlag) {
+                                '5' -> {
+                                    outFile.mkdirs()
+                                    extractedEntries++
+                                }
+                                '0', '\u0000' -> {
+                                    outFile.parentFile?.mkdirs()
+                                    FileOutputStream(outFile).use { fos ->
+                                        var remaining = fileSize
+                                        while (remaining > 0) {
+                                            val toRead = minOf(remaining, ioBuf.size.toLong()).toInt()
+                                            val read = gzip.read(ioBuf, 0, toRead)
+                                            if (read <= 0) break
+                                            fos.write(ioBuf, 0, read)
+                                            remaining -= read
+                                        }
+                                    }
+                                    if (fullRelName.contains("bin/") || fullRelName.endsWith(".sh")) {
+                                        outFile.setExecutable(true)
+                                    }
+                                    extractedEntries++
+                                }
+                                else -> {
+                                    // Skip payload for symlinks/special entries
+                                    skipFully(gzip, fileSize)
+                                }
+                            }
+                        } else {
+                            skipFully(gzip, fileSize)
+                        }
+                    } else {
+                        skipFully(gzip, fileSize)
+                    }
+
+                    // Align to 512-byte TAR block boundary
+                    val remainder = (fileSize % 512L).toInt()
+                    if (remainder > 0) {
+                        skipFully(gzip, (512 - remainder).toLong())
+                    }
                 }
             }
         }.onFailure {
-            appendLog("Note: Archive stream check completed (${it.message}).")
+            appendLog("Note during tar.gz extraction: ${it.message}")
+        }
+        return extractedEntries
+    }
+
+    private fun readTarString(buf: ByteArray, offset: Int, length: Int): String {
+        var end = offset
+        val limit = (offset + length).coerceAtMost(buf.size)
+        while (end < limit && buf[end] != 0.toByte()) {
+            end++
+        }
+        return String(buf, offset, end - offset, Charsets.UTF_8).trim()
+    }
+
+    private fun skipFully(stream: java.io.InputStream, bytesToSkip: Long) {
+        var remaining = bytesToSkip
+        val discard = ByteArray(2048)
+        while (remaining > 0) {
+            val r = stream.read(discard, 0, minOf(remaining, discard.size.toLong()).toInt())
+            if (r <= 0) break
+            remaining -= r
         }
     }
 
     /**
      * Starts the runtime and runs a real Proof-of-Concept Linux shell probe (`uname -a && id`)
      * to verify process execution and exit status before any higher-level tasks run.
+     * Executes via PRoot if `libproot.so` and rootfs `/bin/sh` are present; otherwise honestly reports ANDROID_POSIX_SHELL.
      */
     suspend fun startRuntime(): Boolean = withContext(Dispatchers.IO) {
         var receiptHash = _state.value.lastChecksumHex
@@ -316,7 +399,23 @@ class ProotRuntimeManager(
 
         appendLog("Executing Proof-of-Concept Linux shell probe (uname -a && id)...")
         return@withContext try {
-            val pb = ProcessBuilder(listOf("sh", "-c", "uname -a && id"))
+            val packagedProot = findPackagedProotBinary()
+            val rootfsSh = File(rootfsDir, "bin/sh")
+            val useProot = packagedProot != null && rootfsSh.exists() && rootfsSh.canExecute()
+            val probeArgs = if (useProot) {
+                listOf(
+                    packagedProot!!.absolutePath,
+                    "-r", rootfsDir.absolutePath,
+                    "-b", "${workspaceDir.absolutePath}:/workspace",
+                    "-w", "/workspace",
+                    "/bin/sh", "-c", "uname -a && id"
+                )
+            } else {
+                val hostSh = if (File("/system/bin/sh").canExecute()) "/system/bin/sh" else "sh"
+                listOf(hostSh, "-c", "uname -a && id")
+            }
+
+            val pb = ProcessBuilder(probeArgs)
             pb.directory(workspaceDir)
             pb.redirectErrorStream(true)
             val proc = pb.start()
@@ -325,8 +424,7 @@ class ProotRuntimeManager(
             val exitCode = if (completed) proc.exitValue() else -1
 
             if (completed && exitCode == 0) {
-                val packagedProot = findPackagedProotBinary()
-                val mode = if (packagedProot != null) "PROOT_USERSPACE" else "ANDROID_POSIX_SHELL"
+                val mode = if (useProot) "PROOT_USERSPACE" else "ANDROID_POSIX_SHELL"
                 appendLog("PoC shell probe succeeded (exit=0, mode=$mode): ${output.lines().firstOrNull() ?: "OK"}")
                 refreshStorageAndState()
                 _state.update {

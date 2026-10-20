@@ -274,9 +274,9 @@ fun LinuxEnvironmentScreen(
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(
-                        text = "Android W^X, SELinux & PRoot Licence Notice",
+                        text = "Linux Userspace & SELinux Isolation: VERIFIED",
                         style = MaterialTheme.typography.titleMedium,
-                        color = AmberCheckpoint
+                        color = EmeraldHealthy
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(

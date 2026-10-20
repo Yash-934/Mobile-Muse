@@ -30,12 +30,12 @@ private val DarkColorScheme = darkColorScheme(
 private val LightColorScheme = lightColorScheme(
     primary = CyanPrimaryLight,
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFCFFAFE),
-    onPrimaryContainer = Color(0xFF164E63),
+    primaryContainer = Color(0xFFF3ECE4),
+    onPrimaryContainer = MuseCharcoalPrimary,
     secondary = IndigoSecondaryLight,
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFE0E7FF),
-    onSecondaryContainer = Color(0xFF1E1B4B),
+    secondaryContainer = Color(0xFFFCEFE5),
+    onSecondaryContainer = Color(0xFF4A250D),
     tertiary = EmeraldHealthy,
     error = RoseError,
     background = AlabasterBg,
@@ -44,12 +44,12 @@ private val LightColorScheme = lightColorScheme(
     onSurface = TextPrimaryLight,
     surfaceVariant = SurfaceMuted,
     onSurfaceVariant = TextSecondaryLight,
-    outline = Color(0xFFCBD5E1)
+    outline = MuseWarmBorder
 )
 
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = true,
+    darkTheme: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme

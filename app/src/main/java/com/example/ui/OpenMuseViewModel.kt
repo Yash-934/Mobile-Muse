@@ -1,10 +1,18 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.agent.AgentForegroundService
 import com.example.agent.AutonomousTaskEngine
 import com.example.agent.GeminiModelProvider
 import com.example.backend.LocalHealthStatus
@@ -91,7 +99,8 @@ class OpenMuseViewModel(application: Application) : AndroidViewModel(application
         repository = repository,
         runtimeManager = runtimeManager,
         credentialStore = credentialStore,
-        scope = viewModelScope
+        scope = viewModelScope,
+        computerProvider = computerProvider
     )
 
     val browserController = TwoLayerBrowserController(
@@ -127,6 +136,12 @@ class OpenMuseViewModel(application: Application) : AndroidViewModel(application
 
     private val _workspaceFiles = MutableStateFlow<List<WorkspaceFileItem>>(emptyList())
     val workspaceFiles: StateFlow<List<WorkspaceFileItem>> = _workspaceFiles.asStateFlow()
+
+    private val _currentFolderSubdir = MutableStateFlow("")
+    val currentFolderSubdir: StateFlow<String> = _currentFolderSubdir.asStateFlow()
+
+    private val _lastOpenedMap = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val lastOpenedMap: StateFlow<Map<String, Long>> = _lastOpenedMap.asStateFlow()
 
     private val _selectedFilePath = MutableStateFlow("README.md")
     val selectedFilePath: StateFlow<String> = _selectedFilePath.asStateFlow()
@@ -199,6 +214,18 @@ class OpenMuseViewModel(application: Application) : AndroidViewModel(application
             openWorkspaceFile("README.md")
             refreshMemoryMetrics()
             _geminiKeyMaskedStatus.value = credentialStore.getMaskedGeminiKeyStatus()
+        }
+        viewModelScope.launch {
+            taskEngine.runningTaskIds.collect { runningIds ->
+                if (runningIds.isNotEmpty()) {
+                    AgentForegroundService.startOrUpdate(
+                        getApplication(),
+                        "Executing ${runningIds.size} autonomous task(s)..."
+                    )
+                } else {
+                    AgentForegroundService.stop(getApplication())
+                }
+            }
         }
     }
 
@@ -284,6 +311,51 @@ class OpenMuseViewModel(application: Application) : AndroidViewModel(application
         _showArchivedThreads.value = show
     }
 
+    fun assignThreadGroup(threadId: Long, groupTag: String) {
+        viewModelScope.launch {
+            val existing = threads.value.firstOrNull { it.id == threadId } ?: return@launch
+            val strippedTitle = existing.title.replace(Regex("^\\[(Study|Coding|Work|Saved)]\\s*"), "").trim()
+            val updatedTitle = if (groupTag.isBlank() || groupTag.equals("All", ignoreCase = true) || groupTag.equals("General", ignoreCase = true)) {
+                strippedTitle
+            } else {
+                "[$groupTag] $strippedTitle"
+            }
+            repository.renameThread(threadId, updatedTitle)
+            _statusBannerMessage.value = "Moved conversation to group '${groupTag.ifBlank { "General" }}'"
+        }
+    }
+
+    fun copyTextToClipboard(context: Context, label: String, text: String) {
+        runCatching {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
+            _statusBannerMessage.value = "Copied $label to clipboard."
+        }
+    }
+
+    fun shareTextOrFile(context: Context, title: String, content: String) {
+        runCatching {
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, title)
+                putExtra(Intent.EXTRA_TEXT, content)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val chooser = Intent.createChooser(sendIntent, "Share $title").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+        }.onFailure { err ->
+            _statusBannerMessage.value = "Share failed: ${err.message}"
+        }
+    }
+
+    fun downloadSnippetToWorkspaceAndDevice(context: Context, fileName: String, content: String) {
+        val cleanName = fileName.trim().replace("/", "_").ifBlank { "muse_export_${System.currentTimeMillis() % 10000}.txt" }
+        saveWorkspaceFile(cleanName, content)
+        downloadWorkspaceFileToDevice(context, cleanName)
+    }
+
     fun submitUserPrompt(promptText: String) {
         val clean = promptText.trim()
         if (clean.isEmpty()) return
@@ -367,12 +439,20 @@ class OpenMuseViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { repository.clearCommandReceipts() }
     }
 
-    fun refreshWorkspaceFiles() {
-        _workspaceFiles.value = computerProvider.listWorkspaceFiles()
+    fun refreshWorkspaceFiles(subdir: String = _currentFolderSubdir.value) {
+        _currentFolderSubdir.value = subdir
+        _workspaceFiles.value = computerProvider.listWorkspaceFiles(subdir)
+    }
+
+    fun navigateToWorkspaceFolder(subdir: String) {
+        val clean = subdir.trim().removePrefix("/").removeSuffix("/")
+        _currentFolderSubdir.value = clean
+        _workspaceFiles.value = computerProvider.listWorkspaceFiles(clean)
     }
 
     fun openWorkspaceFile(relativePath: String) {
         _selectedFilePath.value = relativePath
+        _lastOpenedMap.update { it + (relativePath to System.currentTimeMillis()) }
         computerProvider.readWorkspaceFile(relativePath).onSuccess { content ->
             _selectedFileContent.value = content
         }.onFailure { err ->
@@ -385,16 +465,38 @@ class OpenMuseViewModel(application: Application) : AndroidViewModel(application
         computerProvider.writeWorkspaceFile(cleanPath, content).onSuccess {
             _selectedFilePath.value = cleanPath
             _selectedFileContent.value = content
-            refreshWorkspaceFiles()
+            _lastOpenedMap.update { map -> map + (cleanPath to System.currentTimeMillis()) }
+            refreshWorkspaceFiles(_currentFolderSubdir.value)
             _statusBannerMessage.value = "Saved '$cleanPath' (${it.length()} bytes) in workspace."
         }.onFailure { err ->
             _statusBannerMessage.value = "Failed to save '$cleanPath': ${err.message}"
         }
     }
 
+    fun createWorkspaceFolder(folderName: String) {
+        val cleanName = folderName.trim().replace("/", "")
+        if (cleanName.isBlank()) return
+        val rel = if (_currentFolderSubdir.value.isBlank()) cleanName else "${_currentFolderSubdir.value}/$cleanName"
+        computerProvider.createWorkspaceFolder(rel).onSuccess {
+            refreshWorkspaceFiles(_currentFolderSubdir.value)
+            _statusBannerMessage.value = "Created folder '$rel'"
+        }.onFailure { err ->
+            _statusBannerMessage.value = "Failed to create folder: ${err.message}"
+        }
+    }
+
+    fun renameWorkspaceItem(oldRelativePath: String, newName: String) {
+        computerProvider.renameWorkspaceItem(oldRelativePath, newName).onSuccess {
+            refreshWorkspaceFiles(_currentFolderSubdir.value)
+            _statusBannerMessage.value = "Renamed '$oldRelativePath' to '${it.name}'"
+        }.onFailure { err ->
+            _statusBannerMessage.value = "Rename failed: ${err.message}"
+        }
+    }
+
     fun deleteWorkspaceFile(relativePath: String) {
         computerProvider.deleteWorkspaceFile(relativePath).onSuccess {
-            refreshWorkspaceFiles()
+            refreshWorkspaceFiles(_currentFolderSubdir.value)
             _statusBannerMessage.value = "Deleted '$relativePath' from workspace."
         }
     }
@@ -418,6 +520,62 @@ class OpenMuseViewModel(application: Application) : AndroidViewModel(application
             }.onFailure { err ->
                 _statusBannerMessage.value = "SAF export failed: ${err.message}"
             }
+        }
+    }
+
+    fun shareWorkspaceFile(context: Context, relativePath: String) {
+        computerProvider.readWorkspaceFile(relativePath).onSuccess { content ->
+            shareTextOrFile(context, relativePath.substringAfterLast("/"), content)
+        }.onFailure { err ->
+            _statusBannerMessage.value = "Unable to share '$relativePath': ${err.message}"
+        }
+    }
+
+    fun downloadWorkspaceFileToDevice(context: Context, relativePath: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            computerProvider.readWorkspaceFile(relativePath).onSuccess { content ->
+                val fileName = relativePath.substringAfterLast("/").ifBlank { "workspace_file.txt" }
+                val bytes = content.toByteArray(Charsets.UTF_8)
+                val savedLocation = runCatching {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val resolver = context.contentResolver
+                        val values = ContentValues().apply {
+                            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                            put(MediaStore.Downloads.MIME_TYPE, guessMimeType(fileName))
+                            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/OpenMuse")
+                        }
+                        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        if (uri != null) {
+                            resolver.openOutputStream(uri)?.use { out -> out.write(bytes) }
+                            "Downloads/OpenMuse/$fileName"
+                        } else null
+                    } else null
+                }.getOrNull() ?: run {
+                    val fallbackDir = java.io.File(
+                        context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir,
+                        "OpenMuse_Downloads"
+                    )
+                    fallbackDir.mkdirs()
+                    val outFile = java.io.File(fallbackDir, fileName)
+                    outFile.writeBytes(bytes)
+                    outFile.absolutePath
+                }
+                _statusBannerMessage.value = "Saved '$fileName' (${bytes.size} bytes) to Device: $savedLocation"
+            }.onFailure { err ->
+                _statusBannerMessage.value = "Download failed for '$relativePath': ${err.message}"
+            }
+        }
+    }
+
+    private fun guessMimeType(fileName: String): String {
+        return when (fileName.substringAfterLast('.', "").lowercase()) {
+            "md", "markdown" -> "text/markdown"
+            "html", "htm" -> "text/html"
+            "json" -> "application/json"
+            "py" -> "text/x-python"
+            "sh" -> "application/x-sh"
+            "js" -> "application/javascript"
+            else -> "text/plain"
         }
     }
 

@@ -30,7 +30,12 @@ data class WorkspaceFileItem(
     val relativePath: String,
     val isDirectory: Boolean,
     val sizeBytes: Long,
-    val lastModified: Long
+    val lastModified: Long,
+    val fileTypeBadge: String = if (isDirectory) {
+        "FOLDER"
+    } else {
+        name.substringAfterLast('.', "FILE").uppercase().ifBlank { "FILE" }
+    }
 )
 
 interface ComputerProvider {
@@ -369,6 +374,26 @@ class AndroidProotComputerProvider(
     override fun deleteWorkspaceFile(relativePath: String): Result<Boolean> = runCatching {
         val file = resolveSafeFile(relativePath)
         if (file.isDirectory) file.deleteRecursively() else file.delete()
+    }
+
+    fun createWorkspaceFolder(relativePath: String): Result<File> = runCatching {
+        val dir = resolveSafeFile(relativePath)
+        if (!dir.exists()) {
+            require(dir.mkdirs()) { "Unable to create folder: $relativePath" }
+        }
+        dir
+    }
+
+    fun renameWorkspaceItem(oldRelativePath: String, newName: String): Result<File> = runCatching {
+        val src = resolveSafeFile(oldRelativePath)
+        require(src.exists()) { "Item not found: $oldRelativePath" }
+        val cleanNewName = newName.trim().replace("/", "").replace("\\", "")
+        require(cleanNewName.isNotBlank() && cleanNewName != "." && cleanNewName != "..") { "Invalid new name" }
+        val parentRel = oldRelativePath.substringBeforeLast("/", "")
+        val dstRel = if (parentRel.isBlank()) cleanNewName else "$parentRel/$cleanNewName"
+        val dst = resolveSafeFile(dstRel)
+        require(src.renameTo(dst)) { "Unable to rename '$oldRelativePath' to '$cleanNewName'" }
+        dst
     }
 
     suspend fun importExternalFileViaSaf(context: Context, uri: Uri, targetFileName: String): Result<File> =

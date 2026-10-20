@@ -109,11 +109,19 @@ class ExampleRobolectricTest {
     @Test
     fun `3 workspace file creation reading and traversal protection`() = runBlocking {
         repository.ensureInitialized()
-        val writeRes = computerProvider.writeWorkspaceFile("notes/agent_test.txt", "verified payload 42")
+        val folderRes = computerProvider.createWorkspaceFolder("notes/sub")
+        assertTrue(folderRes.isSuccess)
+
+        val writeRes = computerProvider.writeWorkspaceFile("notes/agent_test.md", "verified payload 42")
         assertTrue(writeRes.isSuccess)
 
-        val readRes = computerProvider.readWorkspaceFile("notes/agent_test.txt")
+        val readRes = computerProvider.readWorkspaceFile("notes/agent_test.md")
         assertEquals("verified payload 42", readRes.getOrNull())
+
+        val renameRes = computerProvider.renameWorkspaceItem("notes/agent_test.md", "renamed_note.md")
+        assertTrue(renameRes.isSuccess)
+        val listedNotes = computerProvider.listWorkspaceFiles("notes")
+        assertTrue(listedNotes.any { it.name == "renamed_note.md" && it.fileTypeBadge == "MD" })
 
         val traversalAttempt = computerProvider.readWorkspaceFile("../../etc/passwd")
         assertTrue("Path traversal outside workspace must fail", traversalAttempt.isFailure)
@@ -144,7 +152,8 @@ class ExampleRobolectricTest {
             repository = repository,
             runtimeManager = runtimeManager,
             credentialStore = credentialStore,
-            scope = testScope
+            scope = testScope,
+            computerProvider = computerProvider
         )
         server.start(0)
         // Wait briefly for server socket bind
@@ -173,7 +182,31 @@ class ExampleRobolectricTest {
             assertEquals(200, resp.code)
             val body = resp.body?.string() ?: ""
             assertTrue(body.contains("\"apiRunning\": true"))
+            assertTrue(body.contains("\"pocShellVerified\": true"))
         }
+
+        // Verify /files endpoint lists workspace files
+        val filesReq = Request.Builder()
+            .url("http://127.0.0.1:$port/files")
+            .header("Authorization", "Bearer ${credentialStore.loopbackBearerToken}")
+            .build()
+        client.newCall(filesReq).execute().use { resp ->
+            assertEquals(200, resp.code)
+            val body = resp.body?.string() ?: ""
+            assertTrue(body.contains("README.md"))
+        }
+
+        // Verify /terminal endpoint executes shell command and returns stdout
+        val termReq = Request.Builder()
+            .url("http://127.0.0.1:$port/terminal?cmd=echo+loopback-endpoint-ok")
+            .header("Authorization", "Bearer ${credentialStore.loopbackBearerToken}")
+            .build()
+        client.newCall(termReq).execute().use { resp ->
+            assertEquals(200, resp.code)
+            val body = resp.body?.string() ?: ""
+            assertTrue(body.contains("loopback-endpoint-ok"))
+        }
+
         server.stop()
     }
 
@@ -280,5 +313,27 @@ class ExampleRobolectricTest {
         }
         assertNotNull(chatTask)
         assertEquals("COMPLETED", chatTask?.status)
+
+        // Verify natural language prompts produce distinct, real tool execution plans (never repeating the greeting)
+        val gemini = GeminiModelProvider(credentialStore)
+        val cricbuzzPlan = gemini.buildExecutionPlan("open cricbuzz and check score").getOrThrow()
+        assertTrue(cricbuzzPlan.any { it.toolName == "browse_url" && it.argument.contains("cricbuzz.com") })
+        assertTrue(cricbuzzPlan.any { it.toolName == "web_search" })
+
+        val htmlPlan = gemini.buildExecutionPlan("create index.html webpage").getOrThrow()
+        assertTrue(htmlPlan.any { it.toolName == "write_file" && it.argument.startsWith("index.html|") })
+
+        val mathPlan = gemini.buildExecutionPlan("25 * 48").getOrThrow()
+        assertTrue(mathPlan.first().argument.contains("1200"))
+
+        val generalQuestionPlan = gemini.buildExecutionPlan("who won ipl 2024").getOrThrow()
+        assertEquals("web_search", generalQuestionPlan.first().toolName)
+
+        // Verify textbook math formula (\frac, $$) and codebox markdown response
+        val formulaPlan = gemini.buildExecutionPlan("प्रतिशत (Percentage) सूत्र और उदाहरण समझाओ").getOrThrow()
+        val formulaReply = formulaPlan.first().argument
+        assertTrue(formulaReply.contains("\\frac"))
+        assertTrue(formulaReply.contains("$$"))
+        assertTrue(formulaReply.contains("```python"))
     }
 }

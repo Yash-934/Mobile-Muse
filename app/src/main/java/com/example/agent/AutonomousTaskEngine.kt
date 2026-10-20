@@ -232,16 +232,17 @@ class AutonomousTaskEngine(
 
             // Post inline receipt card to chat thread
             val cardType = when (step.toolName) {
-                "browse_url" -> "BROWSER_SNAPSHOT"
+                "browse_url", "web_search" -> "BROWSER_SNAPSHOT"
                 "write_file", "read_file" -> "FILE_DIFF"
                 else -> "COMMAND_RECEIPT"
             }
+            val safeUrlMeta = browserController.uiState.value.currentUrl.replace("\"", "")
             repository.addMessage(
                 threadId = latestTask.threadId,
                 role = "TOOL",
                 content = "[Step ${step.stepIndex + 1}: ${step.toolName}] ${step.title}\n${stepOutcome.observationOutput}",
                 cardType = cardType,
-                metadataJson = """{"taskId":${latestTask.id},"stepIndex":${step.stepIndex},"exitCode":${stepOutcome.exitCode ?: 0},"durationMs":${stepOutcome.durationMs}}"""
+                metadataJson = """{"taskId":${latestTask.id},"stepIndex":${step.stepIndex},"exitCode":${stepOutcome.exitCode ?: 0},"durationMs":${stepOutcome.durationMs},"url":"$safeUrlMeta"}"""
             )
 
             if (stepOutcome.status == "FAILED") {
@@ -411,7 +412,22 @@ class AutonomousTaskEngine(
                     appendLine("Title: ${dom.title}")
                     appendLine("Interactive Elements (${dom.interactiveElementsSummary.size}):")
                     dom.interactiveElementsSummary.take(6).forEach { appendLine("  - $it") }
-                    appendLine(dom.sanitizedUntrustedText.take(1200))
+                    appendLine(dom.sanitizedUntrustedText.take(1500))
+                }
+                step.copy(
+                    status = if (dom.error == null) "COMPLETED" else "FAILED",
+                    observationOutput = summary,
+                    exitCode = if (dom.error == null) 0 else 1,
+                    durationMs = dur
+                )
+            }
+            "web_search" -> {
+                val dom = browserController.searchWebAutonomously(step.toolArgsJson.trim())
+                val dur = (System.currentTimeMillis() - start).coerceAtLeast(1L)
+                val summary = buildString {
+                    appendLine("Search Query: ${step.toolArgsJson.trim()}")
+                    appendLine("Browser URL: ${dom.url}")
+                    appendLine(dom.sanitizedUntrustedText.take(2500))
                 }
                 step.copy(
                     status = if (dom.error == null) "COMPLETED" else "FAILED",

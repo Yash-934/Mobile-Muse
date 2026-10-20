@@ -1,0 +1,86 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+
+    <!-- Soft circular backdrop -->
+    <path
+        android:pathData="M60,4 C90.9,4 116,29.1 116,60 C116,90.9 90.9,116 60,116 C29.1,116 4,90.9 4,60 C4,29.1 29.1,4 60,4 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="60"
+                android:startY="4"
+                android:endX="60"
+                android:endY="116"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFFBF7F2" />
+                <item android:offset="1.0" android:color="#FFF3ECE2" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Cozy plush beige hood/body silhouette -->
+    <path
+        android:pathData="M24,104 C24,68 30,22 60,22 C90,22 96,68 96,104 C84,112 72,115 60,115 C48,115 36,112 24,104 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="60"
+                android:startY="22"
+                android:endX="60"
+                android:endY="115"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFEAD8C3" />
+                <item android:offset="0.6" android:color="#FFDEC7AE" />
+                <item android:offset="1.0" android:color="#FFD1B598" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Inner hood rim shadow -->
+    <path
+        android:pathData="M60,34 C76,34 84,43 84,55 C84,67 76,74 60,74 C44,74 36,67 36,55 C36,43 44,34 60,34 Z"
+        android:fillColor="#FFC9AC8E" />
+
+    <!-- Warm peach/cream face -->
+    <path
+        android:pathData="M60,37 C74,37 81,45 81,55.5 C81,66 74,72 60,72 C46,72 39,66 39,55.5 C39,45 46,37 60,37 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="60"
+                android:startY="37"
+                android:endX="60"
+                android:endY="72"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFFCE9D8" />
+                <item android:offset="1.0" android:color="#FFF5D5BC" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Rosy cheeks -->
+    <path
+        android:pathData="M47,58.5 m-4.5,0 a4.5,3 0 1,0 9,0 a4.5,3 0 1,0 -9,0"
+        android:fillColor="#66F48FB1" />
+    <path
+        android:pathData="M73,58.5 m-4.5,0 a4.5,3 0 1,0 9,0 a4.5,3 0 1,0 -9,0"
+        android:fillColor="#66F48FB1" />
+
+    <!-- Left eye -->
+    <path
+        android:pathData="M50,53 m-2.2,0 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0"
+        android:fillColor="#FF2D221B" />
+    <!-- Right eye -->
+    <path
+        android:pathData="M70,53 m-2.2,0 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0"
+        android:fillColor="#FF2D221B" />
+
+    <!-- Cute gentle smile -->
+    <path
+        android:pathData="M56.5,58.5 Q60,61.8 63.5,58.5"
+        android:strokeWidth="1.8"
+        android:strokeColor="#FF3E2F25"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+</vector>

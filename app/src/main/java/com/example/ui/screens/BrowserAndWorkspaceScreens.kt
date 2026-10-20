@@ -5,6 +5,7 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -31,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -39,7 +41,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Folder
@@ -50,7 +54,9 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -797,14 +803,48 @@ fun WorkspaceAndTerminalScreen(
     onConfirmCommand: () -> Unit,
     onDismissConfirmation: () -> Unit,
     onClearReceipts: () -> Unit,
-    onRunGitOp: (String, String, Boolean) -> Unit
+    onRunGitOp: (String, String, Boolean) -> Unit,
+    currentFolderSubdir: String = "",
+    workspaceAbsolutePath: String = "/data/user/0/com.aistudio.openmuse/files/workspace",
+    lastOpenedMap: Map<String, Long> = emptyMap(),
+    onNavigateFolder: (String) -> Unit = {},
+    onCreateFolder: (String) -> Unit = {},
+    onRenameItem: (String, String) -> Unit = { _, _ -> },
+    onDownloadFileToDevice: (android.content.Context, String) -> Unit = { _, _ -> },
+    onShareFile: (android.content.Context, String) -> Unit = { _, _ -> },
+    onCopyText: (android.content.Context, String, String) -> Unit = { _, _, _ -> },
+    isDarkTheme: Boolean = false
 ) {
     val context = LocalContext.current
-    var activeSubTab by remember { mutableIntStateOf(0) } // 0 = Terminal, 1 = Files & SAF, 2 = Git
+    var activeSubTab by remember { mutableIntStateOf(1) } // Default to Files & Folder Manager (1) for instant file manager experience
+    var filesInnerTab by remember { mutableIntStateOf(0) } // 0 = Files (N), 1 = Recent (N), 2 = Workspace
     var commandInput by remember { mutableStateOf("uname -a && ls -la") }
     var filePathInput by remember(selectedFilePath) { mutableStateOf(selectedFilePath) }
     var fileContentInput by remember(selectedFileContent) { mutableStateOf(selectedFileContent) }
     var gitCommitMessage by remember { mutableStateOf("Update workspace files") }
+
+    // Full-Screen File Viewer & Editor screen state (opens when tapping any file or "+ New File")
+    var isFullScreenFileViewerOpen by remember { mutableStateOf(false) }
+    var isPreviewModeInFullScreen by remember { mutableStateOf(false) }
+
+    // Folder Management System state
+    var searchQuery by remember { mutableStateOf("") }
+    var sortBy by remember { mutableStateOf("NAME") } // NAME, SIZE, DATE
+    var showNewFolderDialog by remember { mutableStateOf(false) }
+    var newFolderNameInput by remember { mutableStateOf("") }
+    var itemToRename by remember { mutableStateOf<WorkspaceFileItem?>(null) }
+    var renameInput by remember { mutableStateOf("") }
+
+    if (isFullScreenFileViewerOpen) {
+        BackHandler {
+            isFullScreenFileViewerOpen = false
+        }
+    } else if (activeSubTab == 1 && currentFolderSubdir.isNotBlank()) {
+        BackHandler {
+            val parent = currentFolderSubdir.substringBeforeLast("/", "")
+            onNavigateFolder(parent)
+        }
+    }
 
     val safImportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -820,6 +860,74 @@ fun WorkspaceAndTerminalScreen(
         if (uri != null) {
             onExportSaf(context, filePathInput, uri)
         }
+    }
+
+    if (showNewFolderDialog) {
+        AlertDialog(
+            onDismissRequest = { showNewFolderDialog = false },
+            title = { Text("Create New Folder") },
+            text = {
+                OutlinedTextField(
+                    value = newFolderNameInput,
+                    onValueChange = { newFolderNameInput = it },
+                    label = { Text("Folder Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newFolderNameInput.isNotBlank()) {
+                            onCreateFolder(newFolderNameInput.trim())
+                            newFolderNameInput = ""
+                            showNewFolderDialog = false
+                        }
+                    }
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showNewFolderDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (itemToRename != null) {
+        AlertDialog(
+            onDismissRequest = { itemToRename = null },
+            title = { Text("Rename '${itemToRename?.name}'") },
+            text = {
+                OutlinedTextField(
+                    value = renameInput,
+                    onValueChange = { renameInput = it },
+                    label = { Text("New Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val target = itemToRename
+                        if (target != null && renameInput.isNotBlank()) {
+                            onRenameItem(target.relativePath, renameInput.trim())
+                            itemToRename = null
+                        }
+                    }
+                ) {
+                    Text("Rename")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { itemToRename = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     if (pendingConfirmation != null) {
@@ -859,9 +967,259 @@ fun WorkspaceAndTerminalScreen(
         )
     }
 
+    // --- Dedicated Full-Screen File Viewer & Editor Screen when a file is clicked ---
+    if (isFullScreenFileViewerOpen) {
+        val extBadge = filePathInput.substringAfterLast('.', "TXT").uppercase().take(4)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(12.dp)
+                .testTag("fullscreen_file_viewer_screen")
+        ) {
+            // Top Header Bar with Back button, File Badge, Title, and Preview/Edit Toggle
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 1.dp
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            IconButton(
+                                onClick = { isFullScreenFileViewerOpen = false },
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back to Folder Manager",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFFFDE8D7)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = extBadge,
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = Color(0xFFD97736)
+                                )
+                            }
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = filePathInput.substringAfterLast("/").ifBlank { "Untitled File" },
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "Workspace / $filePathInput • ${fileContentInput.toByteArray().size} bytes",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        // Preview vs Edit Source Toggle Button
+                        OutlinedButton(
+                            onClick = { isPreviewModeInFullScreen = !isPreviewModeInFullScreen },
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPreviewModeInFullScreen) Icons.Default.Edit else Icons.Default.Visibility,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (isPreviewModeInFullScreen) "Edit Code" else "Preview MD")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Editable File Path Input + Save Button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = filePathInput,
+                            onValueChange = { filePathInput = it },
+                            label = { Text("Workspace File Path") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("workspace_file_path_input"),
+                            singleLine = true
+                        )
+                        Button(
+                            onClick = { onSaveFile(filePathInput, fileContentInput) },
+                            modifier = Modifier.testTag("workspace_save_file_button")
+                        ) {
+                            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Save")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Full File Actions Bar: Download to Device | Share | Copy | SAF Save As | Delete
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = {
+                                onSaveFile(filePathInput, fileContentInput)
+                                onDownloadFileToDevice(context, filePathInput)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97736)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.FileDownload, contentDescription = "Download to Device", tint = Color.White, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Download to Device", color = Color.White, maxLines = 1, softWrap = false)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                onSaveFile(filePathInput, fileContentInput)
+                                onShareFile(context, filePathInput)
+                            },
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = "Share File", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Share File", maxLines = 1, softWrap = false)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                onCopyText(context, filePathInput, fileContentInput)
+                            },
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy File Content", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Copy All", maxLines = 1, softWrap = false)
+                        }
+
+                        OutlinedButton(
+                            onClick = { safExportLauncher.launch(filePathInput.substringAfterLast("/")) },
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.FileDownload, contentDescription = "Save As to Device Storage", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Save As (SAF)", maxLines = 1, softWrap = false)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                onDeleteFile(filePathInput)
+                                isFullScreenFileViewerOpen = false
+                            },
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete File", tint = RoseError, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Delete", color = RoseError, maxLines = 1, softWrap = false)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Full-Screen Content Area (either Rich Markdown/Textbook Formula Preview or Full-Screen Code Editor)
+            if (isPreviewModeInFullScreen) {
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 1.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(16.dp)
+                    ) {
+                        com.example.ui.components.MuseMarkdownAndMathView(
+                            content = fileContentInput,
+                            textColor = MaterialTheme.colorScheme.onSurface,
+                            isDark = isDarkTheme,
+                            onCopyText = { text -> onCopyText(context, "Snippet", text) },
+                            onDownloadCodeSnippet = { name, code ->
+                                onSaveFile(name, code)
+                                onDownloadFileToDevice(context, name)
+                            }
+                        )
+                    }
+                }
+            } else {
+                OutlinedTextField(
+                    value = fileContentInput,
+                    onValueChange = { fileContentInput = it },
+                    label = { Text("Full-Screen File Editor ($filePathInput)") },
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .testTag("workspace_file_content_input"),
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMonoFontFamily)
+                )
+            }
+        }
+        return
+    }
+
+    val filteredSortedFiles = remember(files, searchQuery, sortBy) {
+        val q = searchQuery.trim().lowercase()
+        val matching = if (q.isEmpty()) files else files.filter {
+            it.name.lowercase().contains(q) || it.fileTypeBadge.lowercase().contains(q)
+        }
+        when (sortBy) {
+            "SIZE" -> matching.sortedWith(compareBy<WorkspaceFileItem> { !it.isDirectory }.thenByDescending { it.sizeBytes })
+            "DATE" -> matching.sortedWith(compareBy<WorkspaceFileItem> { !it.isDirectory }.thenByDescending { it.lastModified })
+            else -> matching.sortedWith(compareBy<WorkspaceFileItem> { !it.isDirectory }.thenBy { it.name.lowercase() })
+        }
+    }
+
+    val recentFiles = remember(files, lastOpenedMap) {
+        files.filter { !it.isDirectory }
+            .sortedByDescending { lastOpenedMap[it.relativePath] ?: it.lastModified }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .padding(12.dp)
             .testTag("workspace_screen")
     ) {
@@ -869,19 +1227,19 @@ fun WorkspaceAndTerminalScreen(
             Tab(
                 selected = activeSubTab == 0,
                 onClick = { activeSubTab = 0 },
-                text = { Text("Terminal (${receipts.size})") },
+                text = { Text("Terminal (${receipts.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 modifier = Modifier.testTag("workspace_tab_terminal")
             )
             Tab(
                 selected = activeSubTab == 1,
                 onClick = { activeSubTab = 1 },
-                text = { Text("Files (${files.size})") },
+                text = { Text("Files (${files.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 modifier = Modifier.testTag("workspace_tab_files")
             )
             Tab(
                 selected = activeSubTab == 2,
                 onClick = { activeSubTab = 2 },
-                text = { Text("Git Control") },
+                text = { Text("Git Control", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 modifier = Modifier.testTag("workspace_tab_git")
             )
         }
@@ -996,87 +1354,323 @@ fun WorkspaceAndTerminalScreen(
             }
 
             1 -> {
+                // --- Muse Folder Management System (Full-Screen File Manager like Screenshots 5, 6, 7) ---
+                // Sub-Header Tabs: Files (N) | Recent (N) | Workspace
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    files.forEach { f ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        MuseFilesSubTabButton(
+                            label = "Files (${files.size})",
+                            selected = filesInnerTab == 0,
+                            onClick = { filesInnerTab = 0 }
+                        )
+                        MuseFilesSubTabButton(
+                            label = "Recent (${recentFiles.size})",
+                            selected = filesInnerTab == 1,
+                            onClick = { filesInnerTab = 1 }
+                        )
+                        MuseFilesSubTabButton(
+                            label = "Workspace",
+                            selected = filesInnerTab == 2,
+                            onClick = { filesInnerTab = 2 }
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         AssistChip(
-                            onClick = { if (!f.isDirectory) onOpenFile(f.relativePath) },
-                            label = { Text("${f.relativePath} (${f.sizeBytes}B)") },
-                            leadingIcon = {
-                                Icon(
-                                    if (f.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
+                            onClick = { showNewFolderDialog = true },
+                            label = { Text("+ Folder", maxLines = 1, softWrap = false) },
+                            leadingIcon = { Icon(Icons.Default.Folder, contentDescription = "New Folder", modifier = Modifier.size(15.dp)) }
+                        )
+                        AssistChip(
+                            onClick = {
+                                val newPath = if (currentFolderSubdir.isBlank()) "new_note.md" else "$currentFolderSubdir/new_note.md"
+                                filePathInput = newPath
+                                fileContentInput = "# New Note\n\nWrite your markdown, formulas, or code here.\n"
+                                isPreviewModeInFullScreen = false
+                                isFullScreenFileViewerOpen = true
+                            },
+                            label = { Text("+ File", maxLines = 1, softWrap = false) },
+                            leadingIcon = { Icon(Icons.Default.Add, contentDescription = "New File", modifier = Modifier.size(15.dp)) }
                         )
                     }
                 }
 
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = filePathInput,
-                        onValueChange = { filePathInput = it },
-                        label = { Text("Relative Workspace File Path") },
+
+                // Breadcrumb Path + Search & Sort Controls (when in Files view)
+                if (filesInnerTab == 0) {
+                    Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .testTag("workspace_file_path_input"),
-                        singleLine = true
-                    )
-                    Button(
-                        onClick = { onSaveFile(filePathInput, fileContentInput) },
-                        modifier = Modifier.testTag("workspace_save_file_button")
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Save")
+                        if (currentFolderSubdir.isNotBlank()) {
+                            AssistChip(
+                                onClick = {
+                                    val parent = currentFolderSubdir.substringBeforeLast("/", "")
+                                    onNavigateFolder(parent)
+                                },
+                                label = { Text("← Up", fontWeight = FontWeight.Bold) }
+                            )
+                        }
+                        AssistChip(
+                            onClick = { onNavigateFolder("") },
+                            label = { Text("Workspace Root", fontWeight = if (currentFolderSubdir.isBlank()) FontWeight.Bold else FontWeight.Normal) },
+                            leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(15.dp)) }
+                        )
+                        if (currentFolderSubdir.isNotBlank()) {
+                            val segments = currentFolderSubdir.split("/").filter { it.isNotBlank() }
+                            segments.forEachIndexed { idx, seg ->
+                                val targetSub = segments.take(idx + 1).joinToString("/")
+                                Text("/", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                AssistChip(
+                                    onClick = { onNavigateFolder(targetSub) },
+                                    label = { Text(seg, fontWeight = FontWeight.Bold) }
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        listOf("NAME" to "A-Z", "SIZE" to "Size", "DATE" to "Recent").forEach { (key, label) ->
+                            AssistChip(
+                                onClick = { sortBy = key },
+                                label = {
+                                    Text(
+                                        text = if (sortBy == key) "✓ $label" else label,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                            )
+                        }
+                        AssistChip(
+                            onClick = { safImportLauncher.launch("*/*") },
+                            label = { Text("Import Device File", maxLines = 1, softWrap = false) },
+                            leadingIcon = { Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(15.dp)) }
+                        )
                     }
-                    IconButton(onClick = { onDeleteFile(filePathInput) }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete Workspace File", tint = RoseError)
+
+                    // Search Filter Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search folders, files, or extensions (MD, SH, PY)...", maxLines = 1) },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear Search", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = fileContentInput,
-                    onValueChange = { fileContentInput = it },
-                    label = { Text("File Content Editor") },
+                // --- Full-Height File Manager List (Tapping a folder enters it; tapping a file opens it on a Full-Screen Viewer/Editor!) ---
+                Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .testTag("workspace_file_content_input"),
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMonoFontFamily)
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(
-                        onClick = { safImportLauncher.launch("*/*") },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("SAF Import File")
-                    }
-                    OutlinedButton(
-                        onClick = { safExportLauncher.launch(filePathInput.substringAfterLast("/")) },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("SAF Export File")
+                    when (filesInnerTab) {
+                        0 -> {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(filteredSortedFiles, key = { it.relativePath }) { item ->
+                                    MuseFileRowItem(
+                                        item = item,
+                                        subtitle = if (item.isDirectory) {
+                                            "Folder  •  Tap to open folder"
+                                        } else {
+                                            "${formatFileSize(item.sizeBytes)}  •  ${formatDateShort(item.lastModified)}  •  Tap for Full Screen"
+                                        },
+                                        isSelected = !item.isDirectory && item.relativePath == filePathInput,
+                                        onClick = {
+                                            if (item.isDirectory) {
+                                                onNavigateFolder(item.relativePath)
+                                            } else {
+                                                filePathInput = item.relativePath
+                                                onOpenFile(item.relativePath)
+                                                isPreviewModeInFullScreen = item.fileTypeBadge == "MD"
+                                                isFullScreenFileViewerOpen = true
+                                            }
+                                        },
+                                        onDownload = {
+                                            if (!item.isDirectory) {
+                                                onDownloadFileToDevice(context, item.relativePath)
+                                            }
+                                        },
+                                        onShare = {
+                                            if (!item.isDirectory) {
+                                                onShareFile(context, item.relativePath)
+                                            }
+                                        },
+                                        onRename = {
+                                            renameInput = item.name
+                                            itemToRename = item
+                                        },
+                                        onDelete = { onDeleteFile(item.relativePath) }
+                                    )
+                                }
+                            }
+                        }
+
+                        1 -> {
+                            // Recent tab matching Screenshot 6 ("84B • Opened 2m ago")
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(recentFiles, key = { it.relativePath }) { item ->
+                                    val openedAt = lastOpenedMap[item.relativePath] ?: item.lastModified
+                                    val minsAgo = ((System.currentTimeMillis() - openedAt) / 60_000L).coerceAtLeast(1L)
+                                    MuseFileRowItem(
+                                        item = item,
+                                        subtitle = "${formatFileSize(item.sizeBytes)}  •  Opened ${minsAgo}m ago  •  Tap for Full Screen",
+                                        isSelected = item.relativePath == filePathInput,
+                                        onClick = {
+                                            filePathInput = item.relativePath
+                                            onOpenFile(item.relativePath)
+                                            isPreviewModeInFullScreen = item.fileTypeBadge == "MD"
+                                            isFullScreenFileViewerOpen = true
+                                        },
+                                        onDownload = { onDownloadFileToDevice(context, item.relativePath) },
+                                        onShare = { onShareFile(context, item.relativePath) },
+                                        onRename = {
+                                            renameInput = item.name
+                                            itemToRename = item
+                                        },
+                                        onDelete = { onDeleteFile(item.relativePath) }
+                                    )
+                                }
+                            }
+                        }
+
+                        2 -> {
+                            // Agent Workspace Dedicated View matching Screenshot 7
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                item {
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(18.dp),
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(18.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(56.dp)
+                                                    .clip(RoundedCornerShape(16.dp))
+                                                    .background(Color(0xFFFDE8D7)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Folder,
+                                                    contentDescription = "Agent Workspace Folder",
+                                                    tint = Color(0xFFD97736),
+                                                    modifier = Modifier.size(28.dp)
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(10.dp))
+                                            Text(
+                                                text = "Agent Workspace",
+                                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Agent's dedicated folder for creating and editing files",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Spacer(modifier = Modifier.height(10.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = MaterialTheme.colorScheme.surfaceVariant
+                                            ) {
+                                                Text(
+                                                    text = workspaceAbsolutePath,
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            Button(
+                                                onClick = { filesInnerTab = 0 },
+                                                shape = RoundedCornerShape(14.dp)
+                                            ) {
+                                                Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Open in Files (${files.size})")
+                                            }
+                                            Spacer(modifier = Modifier.height(14.dp))
+                                            Text(
+                                                text = "Quick Create & Open Full Screen",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Row(
+                                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                listOf(
+                                                    "notes.md" to "# Muse Notes\n\n- Created in Agent Workspace\n",
+                                                    "todo.txt" to "[ ] Review tasks\n[ ] Run Linux verification\n",
+                                                    "ideas.md" to "# Project Ideas\n\n1. Autonomous mobile workflows\n",
+                                                    "script.py" to "print('Hello from OpenMuse Workspace!')\n"
+                                                ).forEach { (quickName, starterText) ->
+                                                    OutlinedButton(
+                                                        onClick = {
+                                                            filePathInput = quickName
+                                                            fileContentInput = starterText
+                                                            onSaveFile(quickName, starterText)
+                                                            isPreviewModeInFullScreen = false
+                                                            isFullScreenFileViewerOpen = true
+                                                        },
+                                                        shape = RoundedCornerShape(12.dp)
+                                                    ) {
+                                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text(quickName, maxLines = 1, softWrap = false)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1154,3 +1748,199 @@ fun WorkspaceAndTerminalScreen(
         }
     }
 }
+
+@Composable
+private fun MuseFilesSubTabButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleSmall.copy(
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+            ),
+            color = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .height(2.dp)
+                .width(if (selected) 48.dp else 0.dp)
+                .background(MaterialTheme.colorScheme.onBackground, RoundedCornerShape(2.dp))
+        )
+    }
+}
+
+/**
+ * Matches Screenshot 5 & 6 file rows:
+ * - Left rounded square badge with color-coded extension ("MD" in warm orange, "SH" in green, "PY" in blue, Folder icon for directories)
+ * - Bold filename + muted size & date subtitle
+ * - Direct one-tap Download to Device, Share, Rename, and Delete buttons on the right
+ */
+@Composable
+private fun MuseFileRowItem(
+    item: WorkspaceFileItem,
+    subtitle: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onDownload: () -> Unit = {},
+    onShare: () -> Unit = {},
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val badgeBg = when {
+        item.isDirectory -> Color(0xFFFEF3C7)
+        item.fileTypeBadge == "MD" -> Color(0xFFFDE8D7)
+        item.fileTypeBadge == "SH" -> Color(0xFFDCFCE7)
+        item.fileTypeBadge == "PY" || item.fileTypeBadge == "KT" -> Color(0xFFDBEAFE)
+        item.fileTypeBadge == "HTML" || item.fileTypeBadge == "JS" -> Color(0xFFE0E7FF)
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val badgeFg = when {
+        item.isDirectory -> Color(0xFFB45309)
+        item.fileTypeBadge == "MD" -> Color(0xFFD97736)
+        item.fileTypeBadge == "SH" -> Color(0xFF15803D)
+        item.fileTypeBadge == "PY" || item.fileTypeBadge == "KT" -> Color(0xFF1D4ED8)
+        item.fileTypeBadge == "HTML" || item.fileTypeBadge == "JS" -> Color(0xFF4338CA)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .testTag("file_row_${item.relativePath}"),
+        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f) else MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(badgeBg),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (item.isDirectory) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = "Folder",
+                            tint = badgeFg,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    } else {
+                        Text(
+                            text = item.fileTypeBadge.take(4),
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = badgeFg,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = item.name,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                if (!item.isDirectory) {
+                    IconButton(
+                        onClick = onDownload,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FileDownload,
+                            contentDescription = "Download ${item.name} to Device",
+                            tint = Color(0xFFD97736),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onShare,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Share ${item.name}",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onRename,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Rename ${item.name}",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete ${item.name}",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatFileSize(bytes: Long): String {
+    return when {
+        bytes < 1024L -> "${bytes}B"
+        bytes < 1024L * 1024L -> "${bytes / 1024L}KB"
+        else -> String.format(java.util.Locale.US, "%.1fMB", bytes / (1024.0 * 1024.0))
+    }
+}
+
+private fun formatDateShort(epochMs: Long): String {
+    if (epochMs <= 0L) return "Today"
+    return java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.US).format(java.util.Date(epochMs))
+}
+

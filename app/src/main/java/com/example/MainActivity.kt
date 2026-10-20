@@ -80,14 +80,14 @@ private data class NavItem(
     val testTag: String
 )
 
-// Concise labels ("Files" instead of "Workspace") prevent any text wrapping/overflow in compact bottom NavigationBar
+// Concise labels ("Files", "Config") prevent any text wrapping/overflow in 6-item bottom NavigationBar
 private val NAV_ITEMS = listOf(
     NavItem(OpenMuseDestination.CHAT, "Chat", Icons.AutoMirrored.Filled.Chat, "nav_chat"),
     NavItem(OpenMuseDestination.TASKS, "Tasks", Icons.Default.CheckCircle, "nav_tasks"),
     NavItem(OpenMuseDestination.BROWSER, "Browser", Icons.Default.Language, "nav_browser"),
     NavItem(OpenMuseDestination.WORKSPACE, "Files", Icons.Default.Folder, "nav_workspace"),
     NavItem(OpenMuseDestination.LINUX_ENV, "Linux", Icons.Default.Memory, "nav_linux"),
-    NavItem(OpenMuseDestination.SETTINGS, "Settings", Icons.Default.Settings, "nav_settings")
+    NavItem(OpenMuseDestination.SETTINGS, "Config", Icons.Default.Settings, "nav_settings")
 )
 
 @Composable
@@ -105,6 +105,8 @@ fun OpenMuseMobileApp(viewModel: OpenMuseViewModel) {
     val browserTabs by viewModel.browserTabs.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarksAndHistory.collectAsStateWithLifecycle()
     val workspaceFiles by viewModel.workspaceFiles.collectAsStateWithLifecycle()
+    val currentFolderSubdir by viewModel.currentFolderSubdir.collectAsStateWithLifecycle()
+    val lastOpenedMap by viewModel.lastOpenedMap.collectAsStateWithLifecycle()
     val selectedFilePath by viewModel.selectedFilePath.collectAsStateWithLifecycle()
     val selectedFileContent by viewModel.selectedFileContent.collectAsStateWithLifecycle()
     val terminalWorkingSubdir by viewModel.terminalWorkingSubdir.collectAsStateWithLifecycle()
@@ -228,7 +230,14 @@ fun OpenMuseMobileApp(viewModel: OpenMuseViewModel) {
                                 onToggleShowArchived = viewModel::setShowArchivedThreads,
                                 onSendPrompt = viewModel::submitUserPrompt,
                                 onApproveCheckpoint = viewModel::approveTaskCheckpoint,
-                                onRejectCheckpoint = viewModel::rejectTaskCheckpoint
+                                onRejectCheckpoint = viewModel::rejectTaskCheckpoint,
+                                onOpenBrowser = { viewModel.navigateTo(OpenMuseDestination.BROWSER) },
+                                onOpenWorkspace = { viewModel.navigateTo(OpenMuseDestination.WORKSPACE) },
+                                isDarkTheme = isDarkTheme,
+                                onAssignThreadGroup = viewModel::assignThreadGroup,
+                                onCopyText = viewModel::copyTextToClipboard,
+                                onShareText = viewModel::shareTextOrFile,
+                                onDownloadSnippet = viewModel::downloadSnippetToWorkspaceAndDevice
                             )
 
                             OpenMuseDestination.TASKS -> TasksActivityScreen(
@@ -275,7 +284,17 @@ fun OpenMuseMobileApp(viewModel: OpenMuseViewModel) {
                                 onConfirmCommand = viewModel::confirmPendingTerminalCommand,
                                 onDismissConfirmation = viewModel::dismissPendingTerminalCommand,
                                 onClearReceipts = viewModel::clearTerminalReceipts,
-                                onRunGitOp = viewModel::runGitCommand
+                                onRunGitOp = viewModel::runGitCommand,
+                                currentFolderSubdir = currentFolderSubdir,
+                                workspaceAbsolutePath = prootState.workspacePath,
+                                lastOpenedMap = lastOpenedMap,
+                                onNavigateFolder = viewModel::navigateToWorkspaceFolder,
+                                onCreateFolder = viewModel::createWorkspaceFolder,
+                                onRenameItem = viewModel::renameWorkspaceItem,
+                                onDownloadFileToDevice = viewModel::downloadWorkspaceFileToDevice,
+                                onShareFile = viewModel::shareWorkspaceFile,
+                                onCopyText = viewModel::copyTextToClipboard,
+                                isDarkTheme = isDarkTheme
                             )
 
                             OpenMuseDestination.LINUX_ENV -> LinuxEnvironmentScreen(
