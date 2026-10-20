@@ -1,0 +1,6 @@
+{
+  "summary": "Architectural and implementation plan for OpenMuse Mobile — an Android-first personal AI agent featuring a local PRoot/Linux runtime manager, loopback agent API & task worker, Gemini function-calling orchestrator, Room SQLite persistence, interactive + autonomous WebView browser engine, workspace file manager, and GitHub Actions APK pipeline.",
+  "updatedAt": "2026-10-20T04:37:18.165360254Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

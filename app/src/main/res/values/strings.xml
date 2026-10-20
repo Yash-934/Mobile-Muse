@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">OpenMuse Mobile</string>
+    <string name="nav_chat">Chat</string>
+    <string name="nav_tasks">Tasks</string>
+    <string name="nav_browser">Browser</string>
+    <string name="nav_workspace">Workspace</string>
+    <string name="nav_linux">Linux Env</string>
+    <string name="nav_settings">Settings</string>
+    <string name="security_warning_prototype">Security Warning: I have included your API keys in the generated APK file for this prototype. Please be aware that Android APKs can be easily decompiled, and these keys can be extracted by anyone who has access to the file. Do not share this APK file publicly or with unauthorized individuals to prevent potential misuse.</string>
+</resources>

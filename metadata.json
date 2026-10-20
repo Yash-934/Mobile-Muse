@@ -1,0 +1,6 @@
+{
+  "name": "OpenMuse Mobile",
+  "description": "Local Android personal AI agent with PRoot Linux runtime manager, loopback task worker, Gemini function calling, Room SQLite persistence, and two-layer browser automation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
