@@ -819,9 +819,14 @@ fun WorkspaceAndTerminalScreen(
     var activeSubTab by remember { mutableIntStateOf(1) } // Default to Files & Folder Manager (1) for instant file manager experience
     var filesInnerTab by remember { mutableIntStateOf(0) } // 0 = Files (N), 1 = Recent (N), 2 = Workspace
     var commandInput by remember { mutableStateOf("uname -a && ls -la") }
-    var filePathInput by remember(selectedFilePath) { mutableStateOf(selectedFilePath) }
-    var fileContentInput by remember(selectedFileContent) { mutableStateOf(selectedFileContent) }
+    var filePathInput by remember { mutableStateOf(selectedFilePath) }
+    var fileContentInput by remember { mutableStateOf(selectedFileContent) }
     var gitCommitMessage by remember { mutableStateOf("Update workspace files") }
+
+    androidx.compose.runtime.LaunchedEffect(selectedFilePath, selectedFileContent) {
+        filePathInput = selectedFilePath
+        fileContentInput = selectedFileContent
+    }
 
     // Full-Screen File Viewer & Editor screen state (opens when tapping any file or "+ New File")
     var isFullScreenFileViewerOpen by remember { mutableStateOf(false) }
@@ -830,6 +835,7 @@ fun WorkspaceAndTerminalScreen(
     // Folder Management System state
     var searchQuery by remember { mutableStateOf("") }
     var sortBy by remember { mutableStateOf("NAME") } // NAME, SIZE, DATE
+    var itemTypeFilter by remember { mutableStateOf("ALL") } // ALL, FILES, FOLDERS
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var newFolderNameInput by remember { mutableStateOf("") }
     var itemToRename by remember { mutableStateOf<WorkspaceFileItem?>(null) }
@@ -1199,10 +1205,15 @@ fun WorkspaceAndTerminalScreen(
         return
     }
 
-    val filteredSortedFiles = remember(files, searchQuery, sortBy) {
+    val filteredSortedFiles = remember(files, searchQuery, sortBy, itemTypeFilter) {
         val q = searchQuery.trim().lowercase()
-        val matching = if (q.isEmpty()) files else files.filter {
+        val byQuery = if (q.isEmpty()) files else files.filter {
             it.name.lowercase().contains(q) || it.fileTypeBadge.lowercase().contains(q)
+        }
+        val matching = when (itemTypeFilter) {
+            "FILES" -> byQuery.filter { !it.isDirectory }
+            "FOLDERS" -> byQuery.filter { it.isDirectory }
+            else -> byQuery
         }
         when (sortBy) {
             "SIZE" -> matching.sortedWith(compareBy<WorkspaceFileItem> { !it.isDirectory }.thenByDescending { it.sizeBytes })
@@ -1354,34 +1365,66 @@ fun WorkspaceAndTerminalScreen(
             }
 
             1 -> {
-                // --- Muse Folder Management System (Full-Screen File Manager like Screenshots 5, 6, 7) ---
-                // Sub-Header Tabs: Files (N) | Recent (N) | Workspace
+                // --- Muse Folder Management System (Full-Screen File Manager) ---
+                // Sub-Header Tabs: Files (N) | Recent (N) | Workspace (clean non-overlapping row)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .horizontalScroll(rememberScrollState())
+                        .padding(bottom = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        MuseFilesSubTabButton(
-                            label = "Files (${files.size})",
-                            selected = filesInnerTab == 0,
-                            onClick = { filesInnerTab = 0 }
-                        )
-                        MuseFilesSubTabButton(
-                            label = "Recent (${recentFiles.size})",
-                            selected = filesInnerTab == 1,
-                            onClick = { filesInnerTab = 1 }
-                        )
-                        MuseFilesSubTabButton(
-                            label = "Workspace",
-                            selected = filesInnerTab == 2,
-                            onClick = { filesInnerTab = 2 }
-                        )
-                    }
+                    MuseFilesSubTabButton(
+                        label = "Files (${files.size})",
+                        selected = filesInnerTab == 0,
+                        onClick = { filesInnerTab = 0 }
+                    )
+                    MuseFilesSubTabButton(
+                        label = "Recent (${recentFiles.size})",
+                        selected = filesInnerTab == 1,
+                        onClick = { filesInnerTab = 1 }
+                    )
+                    MuseFilesSubTabButton(
+                        label = "Workspace",
+                        selected = filesInnerTab == 2,
+                        onClick = { filesInnerTab = 2 }
+                    )
+                }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Breadcrumb Path + Create (+ Folder / + File) + Filter & Sort Controls (when in Files view)
+                if (filesInnerTab == 0) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (currentFolderSubdir.isNotBlank()) {
+                            AssistChip(
+                                onClick = {
+                                    val parent = currentFolderSubdir.substringBeforeLast("/", "")
+                                    onNavigateFolder(parent)
+                                },
+                                label = { Text("← Back", fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false) }
+                            )
+                        }
+                        AssistChip(
+                            onClick = { onNavigateFolder("") },
+                            label = {
+                                Text(
+                                    text = if (currentFolderSubdir.isBlank()) "Workspace Root" else "Root / $currentFolderSubdir",
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            },
+                            leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(15.dp)) }
+                        )
                         AssistChip(
                             onClick = { showNewFolderDialog = true },
                             label = { Text("+ Folder", maxLines = 1, softWrap = false) },
@@ -1398,47 +1441,18 @@ fun WorkspaceAndTerminalScreen(
                             label = { Text("+ File", maxLines = 1, softWrap = false) },
                             leadingIcon = { Icon(Icons.Default.Add, contentDescription = "New File", modifier = Modifier.size(15.dp)) }
                         )
-                    }
-                }
-
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Breadcrumb Path + Search & Sort Controls (when in Files view)
-                if (filesInnerTab == 0) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        if (currentFolderSubdir.isNotBlank()) {
+                        listOf("ALL" to "All (${files.size})", "FILES" to "Files Only", "FOLDERS" to "Folders").forEach { (key, label) ->
                             AssistChip(
-                                onClick = {
-                                    val parent = currentFolderSubdir.substringBeforeLast("/", "")
-                                    onNavigateFolder(parent)
-                                },
-                                label = { Text("← Up", fontWeight = FontWeight.Bold) }
+                                onClick = { itemTypeFilter = key },
+                                label = {
+                                    Text(
+                                        text = if (itemTypeFilter == key) "✓ $label" else label,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
                             )
                         }
-                        AssistChip(
-                            onClick = { onNavigateFolder("") },
-                            label = { Text("Workspace Root", fontWeight = if (currentFolderSubdir.isBlank()) FontWeight.Bold else FontWeight.Normal) },
-                            leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(15.dp)) }
-                        )
-                        if (currentFolderSubdir.isNotBlank()) {
-                            val segments = currentFolderSubdir.split("/").filter { it.isNotBlank() }
-                            segments.forEachIndexed { idx, seg ->
-                                val targetSub = segments.take(idx + 1).joinToString("/")
-                                Text("/", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                AssistChip(
-                                    onClick = { onNavigateFolder(targetSub) },
-                                    label = { Text(seg, fontWeight = FontWeight.Bold) }
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
                         listOf("NAME" to "A-Z", "SIZE" to "Size", "DATE" to "Recent").forEach { (key, label) ->
                             AssistChip(
                                 onClick = { sortBy = key },

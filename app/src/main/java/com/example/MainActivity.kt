@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
@@ -37,6 +39,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -188,6 +191,12 @@ fun OpenMuseMobileApp(viewModel: OpenMuseViewModel) {
                 }
 
                 Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    LaunchedEffect(statusBanner) {
+                        if (statusBanner != null) {
+                            kotlinx.coroutines.delay(3500L)
+                            viewModel.clearStatusBanner()
+                        }
+                    }
                     AnimatedVisibility(visible = statusBanner != null) {
                         Surface(
                             modifier = Modifier
@@ -205,8 +214,10 @@ fun OpenMuseMobileApp(viewModel: OpenMuseViewModel) {
                                 Text(
                                     text = statusBanner ?: "",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = EmeraldHealthy
+                                    color = EmeraldHealthy,
+                                    modifier = Modifier.weight(1f)
                                 )
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "Dismiss",
                                     style = MaterialTheme.typography.labelSmall

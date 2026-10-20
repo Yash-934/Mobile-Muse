@@ -335,5 +335,13 @@ class ExampleRobolectricTest {
         assertTrue(formulaReply.contains("\\frac"))
         assertTrue(formulaReply.contains("$$"))
         assertTrue(formulaReply.contains("```python"))
+
+        // Verify casual Hinglish chat ("abbey yaar") does not trigger spam web search
+        val casualPlan = gemini.buildExecutionPlan("abbey yaar").getOrThrow()
+        assertEquals("chat_reply", casualPlan.first().toolName)
+
+        // Verify HTML entity decoding removes &#x27; and &amp;
+        val decoded = TwoLayerBrowserController.decodeHtmlEntities("ICC Men&#x27;s &amp; &#39;abbey yaar&#39;")
+        assertEquals("ICC Men's & 'abbey yaar'", decoded)
     }
 }

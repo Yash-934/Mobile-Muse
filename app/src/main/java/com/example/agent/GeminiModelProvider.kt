@@ -123,6 +123,8 @@ class GeminiModelProvider(
 
     companion object {
         val SUPPORTED_MODELS = listOf(
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
             "gemini-3.8-flash",
             "gemini-3.5-flash",
             "gemini-flash-latest",
@@ -131,6 +133,8 @@ class GeminiModelProvider(
         )
 
         private val FALLBACK_MODEL_CHAIN = listOf(
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
             "gemini-3.5-flash",
             "gemini-flash-latest",
             "gemini-3.1-flash-lite-preview",
@@ -335,16 +339,45 @@ class GeminiModelProvider(
     }
 
     private fun formatLocalSynthesisReport(goal: String, cleanObservations: String): String {
-        val cleanedLines = cleanObservations.lines()
-            .filterNot { it.startsWith("Step ") && it.contains("[exit=") }
+        val rawLines = cleanObservations.lines()
+        val filteredLines = mutableListOf<String>()
+        var skipInteractiveBlock = false
+
+        for (line in rawLines) {
+            val t = line.trim()
+            if (t.startsWith("Step ") && t.contains("[exit=")) continue
+            if (t.startsWith("Interactive Elements")) {
+                skipInteractiveBlock = true
+                continue
+            }
+            if (skipInteractiveBlock) {
+                if (t.startsWith("- LINK [") || t.startsWith("LINK [") || t == "(none)") {
+                    continue
+                } else {
+                    skipInteractiveBlock = false
+                }
+            }
+            if (t.startsWith("- LINK [") || t.startsWith("LINK [")) continue
+            if (t.startsWith("Browser URL:") || t.startsWith("Search Query:")) continue
+            // Clean noisy Cricbuzz top menu line if present
+            val cleanedLine = line
+                .replace("Menu Live Scores Schedule Archives News Series Teams Videos Rankings More", "")
+                .trimEnd()
+            filteredLines.add(cleanedLine)
+        }
+
+        val body = filteredLines
             .joinToString("\n")
+            .replace(Regex("\n{3,}"), "\n\n")
             .trim()
             .ifBlank { cleanObservations }
 
         return buildString {
-            appendLine("# ${goal.take(60)}")
+            appendLine("# ${goal.take(65)}")
             appendLine()
-            append(cleanedLines.take(2800))
+            appendLine(body.take(2600))
+            appendLine()
+            append("> **नियम:** ऊपर दिए गए परिणाम सीधे लाइव टूल्स (`TwoLayerBrowserController` / `AndroidProotComputerProvider`) से प्राप्त किए गए हैं।")
         }
     }
 
@@ -474,22 +507,33 @@ class GeminiModelProvider(
             return listOf(PlannedToolStep("Explain CopilotKit/OpenMuse Architecture", "chat_reply", explanation))
         }
 
-        // 2. Pure short greetings
-        if (lower in setOf("hi", "hello", "hey", "hii", "hlw", "namaste", "hola", "yo", "sup") ||
-            lower == "how are you" || lower == "kaise ho" || lower == "kya haal hai" || lower == "help"
-        ) {
+        // 2. Pure short greetings & casual conversational Hindi/Hinglish messages
+        val cleanWords = lower.replace(Regex("[^a-z0-9\\u0900-\\u097F\\s]"), " ").trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        val conversationalTokens = setOf(
+            "hi", "hello", "hey", "hii", "hlw", "namaste", "hola", "yo", "sup",
+            "yaar", "abbey", "abe", "abey", "bhai", "bro", "dost", "boss",
+            "ok", "okay", "accha", "acha", "theek", "thik", "sahi", "galat",
+            "thanks", "thank", "shukriya", "dhanyavad", "help", "madad"
+        )
+        val isCasualGreetingOrChat = lower in conversationalTokens ||
+            lower == "how are you" || lower == "kaise ho" || lower == "kya haal hai" ||
+            (cleanWords.size <= 4 && cleanWords.any { it in conversationalTokens } &&
+                !lower.contains("score") && !lower.contains("cricbuzz") && !lower.contains("news") &&
+                !lower.contains("file") && !lower.contains("git") && !lower.contains("run"))
+
+        if (isCasualGreetingOrChat) {
             val reply = buildString {
                 appendLine("# नमस्ते! Main Muse Agent Hoon")
                 appendLine()
                 appendLine("Aap mujhse natural language me kuch bhi puchh sakte hain ya task karwa sakte hain:")
-                appendLine("- 📐 **Textbook Math & Formulas**: *\"प्रतिशत (Percentage) सूत्र समझाओ\"*, `\$\$P% = \\frac{P}{100}\$\$`")
+                appendLine("- 📐 **Textbook Math & Formulas**: *\"प्रतिशत (Percentage) सूत्र समझाओ\"*, P% = \\frac{P}{100}")
                 appendLine("- 🌐 **Live Web & Cricket Scores**: *\"open cricbuzz and check score\"*, *\"latest news today\"*")
                 appendLine("- 💻 **Linux / Device Info**: *\"check ram and storage\"*, *\"run: uname -a\"*")
                 appendLine("- 📁 **Code & Files**: *\"create a calculator in python\"*, *\"create index.html\"*")
                 appendLine()
                 append("> **नियम:** किसी भी कोड बॉक्स को सीधे Copy या Device में Download किया जा सकता है।")
             }
-            return listOf(PlannedToolStep("Assistant Greeting", "chat_reply", reply))
+            return listOf(PlannedToolStep("Assistant Greeting & Capabilities", "chat_reply", reply))
         }
 
         // 3. Direct arithmetic / math evaluation (e.g., "25 * 48", "what is 144 / 12")

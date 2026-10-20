@@ -79,11 +79,10 @@ sealed class InlineMathToken {
 
 /**
  * Rich Markdown + Textbook Formula + Interactive Codebox Renderer.
- * Matches the user's textbook screenshot:
  * - Vertical indigo accent bar for headings (`| प्रतिशत (प्रत्येक सौ / 100)`)
  * - Real vertical stacked fractions (`\frac{37}{100}` or inline `19% = 19/100`)
  * - Centered block equations (`$$ P% = \frac{P}{100} $$`)
- * - Lavender callout rule boxes (`> नियम: ...` or `नियम: ...`)
+ * - Lavender callout rule boxes (`> नियम: ...` or `नियम: ...`) with clean Devanagari shaping
  * - Interactive Codeboxes with Copy and Download/Save buttons
  */
 @Composable
@@ -143,12 +142,13 @@ fun MuseMarkdownAndMathView(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(start = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                        verticalAlignment = Alignment.Top,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(7.dp)
+                                .padding(top = 8.dp)
+                                .size(6.dp)
                                 .clip(CircleShape)
                                 .background(textColor)
                         )
@@ -183,7 +183,7 @@ fun MuseMarkdownAndMathView(
 }
 
 /**
- * Heading with vertical indigo accent bar on the left, matching `| प्रतिशत (प्रत्येक सौ / 100)` in the screenshot.
+ * Heading with vertical indigo accent bar on the left, matching `| प्रतिशत (प्रत्येक सौ / 100)`.
  */
 @Composable
 private fun TextbookHeadingView(
@@ -247,8 +247,8 @@ private fun TextbookBlockFormulaView(
 }
 
 /**
- * Lavender textbook rule / note callout box matching the bottom of the user's screenshot:
- * `| नियम: यदि किसी भिन्न को प्रतिशत में बदलना हो तो भिन्न को 100 से गुणा करें और '%' चिह्न लगा दें।`
+ * Lavender textbook rule / note callout box:
+ * Uses unbroken grapheme runs so Devanagari matras (`नियम: किसी भी कोड बॉक्स...`) render crisply without dotted circles.
  */
 @Composable
 private fun TextbookRuleCalloutCard(
@@ -283,12 +283,13 @@ private fun TextbookRuleCalloutCard(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 val combined = if (title.isNotBlank()) "**$title:** $body" else body
+                val hasDevanagari = remember(combined) { combined.any { it.code in 0x0900..0x097F } }
                 Text(
-                    text = parseInlineMarkdownAnnotated(combined, fgColor, defaultItalic = true),
+                    text = parseInlineMarkdownAnnotated(combined, fgColor, defaultItalic = false),
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 15.sp,
-                        lineHeight = 22.sp,
-                        fontStyle = FontStyle.Italic
+                        lineHeight = 23.sp,
+                        fontStyle = if (hasDevanagari) FontStyle.Normal else FontStyle.Italic
                     ),
                     color = fgColor
                 )
@@ -405,7 +406,7 @@ private fun MuseCodeBlockCard(
 
 /**
  * Renders inline text mixed with real vertical stacked fractions (`\frac{num}{den}` or math fractions `37/100`)
- * so that fractions sit inline with Hindi/English text and equations exactly like a printed textbook.
+ * while preserving multi-word `**bold**`, `*italic*`, and `` `code` `` spans across words.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -420,8 +421,12 @@ fun RichMathFlowRow(
     val tokens = remember(text) { tokenizeInlineMathAndFractions(text) }
 
     if (tokens.size == 1 && tokens.first() is InlineMathToken.TextToken && !italicVariables) {
+        val rawText = (tokens.first() as InlineMathToken.TextToken).text
+        val annotated = remember(rawText, textColor) {
+            parseInlineMarkdownAnnotated(rawText, textColor, defaultItalic = false)
+        }
         Text(
-            text = parseInlineMarkdownAnnotated((tokens.first() as InlineMathToken.TextToken).text, textColor),
+            text = annotated,
             style = MaterialTheme.typography.bodyLarge.copy(
                 fontSize = fontSize,
                 lineHeight = (fontSize.value + 8).sp
@@ -440,25 +445,27 @@ fun RichMathFlowRow(
         tokens.forEach { token ->
             when (token) {
                 is InlineMathToken.TextToken -> {
-                    val words = token.text.split(" ")
-                    words.forEachIndexed { idx, word ->
-                        if (word.isNotEmpty()) {
-                            val trailingSpace = if (idx < words.lastIndex) " " else ""
-                            Text(
-                                text = parseInlineMarkdownAnnotated(
-                                    raw = word + trailingSpace,
-                                    baseColor = textColor,
-                                    defaultItalic = italicVariables && word.any { it.isLetter() }
-                                ),
-                                style = MaterialTheme.typography.bodyLarge.copy(
-                                    fontSize = fontSize,
-                                    fontFamily = if (italicVariables) FontFamily.Serif else FontFamily.Default,
-                                    lineHeight = (fontSize.value + 8).sp
-                                ),
-                                color = textColor,
-                                modifier = Modifier.align(Alignment.CenterVertically)
-                            )
-                        }
+                    // Parse markdown spans FIRST on the full token so multi-word **bold** and *italic* work,
+                    // then slice the AnnotatedString at word boundaries so FlowRow can wrap naturally around fractions.
+                    val fullAnnotated = remember(token.text, textColor, italicVariables) {
+                        parseInlineMarkdownAnnotated(
+                            raw = token.text,
+                            baseColor = textColor,
+                            defaultItalic = italicVariables
+                        )
+                    }
+                    val wordSlices = remember(fullAnnotated) { splitAnnotatedStringByWords(fullAnnotated) }
+                    wordSlices.forEach { wordAnnotated ->
+                        Text(
+                            text = wordAnnotated,
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontSize = fontSize,
+                                fontFamily = if (italicVariables) FontFamily.Serif else FontFamily.Default,
+                                lineHeight = (fontSize.value + 8).sp
+                            ),
+                            color = textColor,
+                            modifier = Modifier.align(Alignment.CenterVertically)
+                        )
                     }
                 }
 
@@ -505,6 +512,32 @@ fun RichMathFlowRow(
     }
 }
 
+private fun splitAnnotatedStringByWords(annotated: AnnotatedString): List<AnnotatedString> {
+    val raw = annotated.text
+    if (raw.isEmpty()) return emptyList()
+    val result = mutableListOf<AnnotatedString>()
+    var i = 0
+    while (i < raw.length) {
+        // Skip extra leading spaces if any, or include trailing space with each word
+        while (i < raw.length && raw[i] == ' ') {
+            i++
+        }
+        if (i >= raw.length) break
+        val wordStart = i
+        while (i < raw.length && raw[i] != ' ') {
+            i++
+        }
+        // Include single trailing space if present so words stay spaced inside FlowRow
+        val sliceEnd = if (i < raw.length && raw[i] == ' ') {
+            i + 1
+        } else {
+            i
+        }
+        result.add(annotated.subSequence(wordStart, sliceEnd))
+    }
+    return result
+}
+
 /**
  * True vertical textbook fraction: numerator centered above a crisp horizontal dividing bar above denominator.
  */
@@ -527,7 +560,7 @@ fun StackedFractionView(
             text = formatMathSymbols(numerator),
             fontSize = fontSize,
             fontWeight = FontWeight.Medium,
-            fontStyle = if (italic && numerator.any { it.isLetter() }) FontStyle.Italic else FontStyle.Normal,
+            fontStyle = if (italic && numerator.any { it in 'a'..'z' || it in 'A'..'Z' }) FontStyle.Italic else FontStyle.Normal,
             fontFamily = if (italic) FontFamily.Serif else FontFamily.Default,
             color = textColor,
             textAlign = TextAlign.Center,
@@ -544,7 +577,7 @@ fun StackedFractionView(
             text = formatMathSymbols(denominator),
             fontSize = fontSize,
             fontWeight = FontWeight.Medium,
-            fontStyle = if (italic && denominator.any { it.isLetter() }) FontStyle.Italic else FontStyle.Normal,
+            fontStyle = if (italic && denominator.any { it in 'a'..'z' || it in 'A'..'Z' }) FontStyle.Italic else FontStyle.Normal,
             fontFamily = if (italic) FontFamily.Serif else FontFamily.Default,
             color = textColor,
             textAlign = TextAlign.Center,
@@ -723,7 +756,7 @@ private fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
 
         // 7. Standalone single-line formula detection (e.g. `P% = \frac{P}{100}`)
         if (trimmed.length < 65 && (trimmed.contains("\\frac{") || Regex("^[A-Za-z0-9%]+\\s*=\\s*\\S+$").matches(trimmed)) && !trimmed.contains("है")) {
-            blocks.add(MarkdownBlock.FormulaBlock(trimmed.trim('$')))
+            blocks.add(MarkdownBlock.FormulaBlock(trimmed.trim('$').trim('`')))
             i++
             continue
         }
@@ -740,13 +773,16 @@ private fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
  * Splits a line of text into `TextToken` and `FractionToken` segments.
  * Supports:
  * - LaTeX `\frac{numerator}{denominator}` (with optional trailing `%` or punctuation)
- * - Explicit math fractions like `37/100`, `19/100`, `5/9%`, `3/700`, `P/100` (while ignoring dates like `20/10/2026` or URLs `https://...`)
+ * - Explicit math fractions like `37/100`, `19/100`, `5/9%`, `3/700`, `P/100` (while ignoring URL paths like `/cricket-schedule/...` or dates like `20/10/2026`)
  */
 private fun tokenizeInlineMathAndFractions(input: String): List<InlineMathToken> {
-    val cleanedInput = input.replace("$$", "").replace("\\(", "").replace("\\)", "")
-    // Combined regex matching either \frac{A}{B}(%)? or standalone fraction A/B(%)? not part of a URL or 3-part date
+    // Strip backticks that wrap math expressions so backticks don't get split across FractionTokens
+    val unwrappedMathBackticks = input.replace(Regex("`([^`]*\\\\frac\\{[^`]+)`"), "$1")
+    val cleanedInput = unwrappedMathBackticks.replace("$$", "").replace("\\(", "").replace("\\)", "")
+
+    // Match either \frac{A}{B}(%)? OR math fractions where numerator is digits or single variable letter and denominator is digits
     val fractionRegex = Regex(
-        """\\frac\{([^{}]+)\}\{([^{}]+)\}(\s*%)?|(?<![:/\w])([A-Za-z0-9+-]{1,6})\s*/\s*([0-9]{1,6}|[A-Za-z]{1,4})(?![/\w])(\s*%)?"""
+        """\\frac\{([^{}]+)\}\{([^{}]+)\}(\s*%)?|(?<![:/\w-])([0-9]{1,5}|[A-Za-z])\s*/\s*([0-9]{1,5})(?![/\w-])(\s*%)?"""
     )
 
     val result = mutableListOf<InlineMathToken>()
@@ -754,7 +790,6 @@ private fun tokenizeInlineMathAndFractions(input: String): List<InlineMathToken>
 
     for (match in fractionRegex.findAll(cleanedInput)) {
         val range = match.range
-        // Skip if this looks like "सौ / 100" inside a heading title with spaces around slash and Hindi word
         val fullMatch = match.value
         if (range.first > lastIdx) {
             val before = cleanedInput.substring(lastIdx, range.first)
@@ -780,19 +815,13 @@ private fun tokenizeInlineMathAndFractions(input: String): List<InlineMathToken>
                 )
             )
         } else if (slashNum != null && slashDen != null) {
-            // Avoid turning words like "On/Off" or "AND/OR" into math fractions
-            val isWordSlash = slashNum.all { it.isLetter() } && slashDen.all { it.isLetter() } && slashNum.length > 1 && slashDen.length > 1
-            if (isWordSlash) {
-                result.add(InlineMathToken.TextToken(fullMatch))
-            } else {
-                result.add(
-                    InlineMathToken.FractionToken(
-                        numerator = slashNum.trim(),
-                        denominator = slashDen.trim(),
-                        suffix = slashPct.trim()
-                    )
+            result.add(
+                InlineMathToken.FractionToken(
+                    numerator = slashNum.trim(),
+                    denominator = slashDen.trim(),
+                    suffix = slashPct.trim()
                 )
-            }
+            )
         } else {
             result.add(InlineMathToken.TextToken(fullMatch))
         }
@@ -830,6 +859,7 @@ private fun formatMathSymbols(input: String): String {
 
 /**
  * Parses inline `**bold**`, `*italic*`, `` `code` ``, superscripts `x^2`, and subscripts `H_2O`.
+ * Preserves contiguous character runs so Devanagari/Hindi matras and ligatures shape without dotted circles.
  */
 fun parseInlineMarkdownAnnotated(
     raw: String,
@@ -841,18 +871,20 @@ fun parseInlineMarkdownAnnotated(
         var i = 0
         while (i < text.length) {
             when {
-                // Bold **...**
+                // 1. Bold **...**
                 text.startsWith("**", i) -> {
                     val end = text.indexOf("**", i + 2)
                     if (end != -1) {
+                        val inner = text.substring(i + 2, end)
+                        val isLatinOnly = inner.none { it.code in 0x0900..0x097F }
                         withStyle(
                             SpanStyle(
                                 fontWeight = FontWeight.Bold,
-                                fontStyle = if (defaultItalic) FontStyle.Italic else FontStyle.Normal,
+                                fontStyle = if (defaultItalic && isLatinOnly) FontStyle.Italic else FontStyle.Normal,
                                 color = baseColor
                             )
                         ) {
-                            append(text.substring(i + 2, end))
+                            append(inner)
                         }
                         i = end + 2
                     } else {
@@ -861,7 +893,29 @@ fun parseInlineMarkdownAnnotated(
                     }
                 }
 
-                // Inline Code `...`
+                // 2. Single-asterisk Italic *...* (not **)
+                text[i] == '*' && (i + 1 < text.length && text[i + 1] != '*') -> {
+                    val end = text.indexOf('*', i + 1)
+                    if (end != -1 && end > i + 1) {
+                        val inner = text.substring(i + 1, end)
+                        val hasDevanagari = inner.any { it.code in 0x0900..0x097F }
+                        withStyle(
+                            SpanStyle(
+                                fontStyle = if (hasDevanagari) FontStyle.Normal else FontStyle.Italic,
+                                fontWeight = if (hasDevanagari) FontWeight.Medium else FontWeight.Normal,
+                                color = baseColor
+                            )
+                        ) {
+                            append(inner)
+                        }
+                        i = end + 1
+                    } else {
+                        append(text[i])
+                        i++
+                    }
+                }
+
+                // 3. Inline Code `...`
                 text[i] == '`' -> {
                     val end = text.indexOf('`', i + 1)
                     if (end != -1) {
@@ -882,7 +936,7 @@ fun parseInlineMarkdownAnnotated(
                     }
                 }
 
-                // Superscript ^2 or ^{...}
+                // 4. Superscript ^2 or ^{...}
                 text[i] == '^' && i + 1 < text.length -> {
                     if (text[i + 1] == '{') {
                         val end = text.indexOf('}', i + 2)
@@ -909,7 +963,7 @@ fun parseInlineMarkdownAnnotated(
                     }
                 }
 
-                // Subscript _2 or _{...}
+                // 5. Subscript _2 or _{...}
                 text[i] == '_' && i + 1 < text.length && (i > 0 && text[i - 1].isLetterOrDigit()) -> {
                     if (text[i + 1] == '{') {
                         val end = text.indexOf('}', i + 2)
@@ -936,15 +990,31 @@ fun parseInlineMarkdownAnnotated(
                     }
                 }
 
+                // 6. Plain text run — append contiguous characters together so HarfBuzz shapes Devanagari matras properly!
                 else -> {
-                    if (defaultItalic) {
+                    val runStart = i
+                    while (i < text.length &&
+                        !text.startsWith("**", i) &&
+                        text[i] != '*' &&
+                        text[i] != '`' &&
+                        text[i] != '^' &&
+                        !(text[i] == '_' && i > 0 && text[i - 1].isLetterOrDigit())
+                    ) {
+                        i++
+                    }
+                    val chunk = if (i > runStart) text.substring(runStart, i) else {
+                        val single = text[i].toString()
+                        i++
+                        single
+                    }
+                    val hasDevanagari = chunk.any { it.code in 0x0900..0x097F }
+                    if (defaultItalic && !hasDevanagari && chunk.any { it in 'a'..'z' || it in 'A'..'Z' }) {
                         withStyle(SpanStyle(fontStyle = FontStyle.Italic, color = baseColor)) {
-                            append(text[i])
+                            append(chunk)
                         }
                     } else {
-                        append(text[i])
+                        append(chunk)
                     }
-                    i++
                 }
             }
         }

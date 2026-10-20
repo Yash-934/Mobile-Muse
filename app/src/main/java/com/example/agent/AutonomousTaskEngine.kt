@@ -230,17 +230,26 @@ class AutonomousTaskEngine(
             val stepOutcome = executeSingleToolStep(step, confirmedByUser = isApprovedNow || !step.requiresApproval)
             repository.updateTaskStep(stepOutcome)
 
-            // Post inline receipt card to chat thread
+            // Post concise inline receipt card to chat thread
             val cardType = when (step.toolName) {
                 "browse_url", "web_search" -> "BROWSER_SNAPSHOT"
                 "write_file", "read_file" -> "FILE_DIFF"
                 else -> "COMMAND_RECEIPT"
             }
             val safeUrlMeta = browserController.uiState.value.currentUrl.replace("\"", "")
+            val cleanCardBody = stepOutcome.observationOutput
+                .replace(Regex("\\[UNTRUSTED_WEB_CONTENT_START[^\\]]*\\]"), "")
+                .replace("[UNTRUSTED_WEB_CONTENT_END]", "")
+                .trim()
+                .lines()
+                .filterNot { it.trim().startsWith("Interactive Elements") || it.trim().startsWith("- LINK [") }
+                .take(10)
+                .joinToString("\n")
+
             repository.addMessage(
                 threadId = latestTask.threadId,
                 role = "TOOL",
-                content = "[Step ${step.stepIndex + 1}: ${step.toolName}] ${step.title}\n${stepOutcome.observationOutput}",
+                content = "**[Step ${step.stepIndex + 1}: ${step.toolName}]** ${step.title}\n$cleanCardBody",
                 cardType = cardType,
                 metadataJson = """{"taskId":${latestTask.id},"stepIndex":${step.stepIndex},"exitCode":${stepOutcome.exitCode ?: 0},"durationMs":${stepOutcome.durationMs},"url":"$safeUrlMeta"}"""
             )
