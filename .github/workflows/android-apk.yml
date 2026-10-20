@@ -25,12 +25,27 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK Licenses
+      - name: Configure Preinstalled Android SDK & Accept Licenses
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          ANDROID_SDK_DIR="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_HOME="$ANDROID_SDK_DIR"
+          export ANDROID_SDK_ROOT="$ANDROID_SDK_DIR"
+          echo "ANDROID_HOME=$ANDROID_SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_DIR" >> "$GITHUB_ENV"
+
+          # Find preinstalled sdkmanager on Ubuntu 24.04 runner without invoking deprecated 'tools' package
+          SDKMANAGER=$(find "$ANDROID_SDK_DIR/cmdline-tools" -name sdkmanager -type f | head -n 1)
+          if [ -n "$SDKMANAGER" ]; then
+            echo "Using sdkmanager at: $SDKMANAGER"
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+            "$SDKMANAGER" --install "platform-tools" "platforms;android-36" "build-tools;35.0.0" > /dev/null 2>&1 || true
+            "$SDKMANAGER" --install "platforms;android-36.1" "build-tools;36.0.0" > /dev/null 2>&1 || true
+          fi
+
+          # Ensure standard license hashes exist so Gradle auto-downloads any minor SDK revision seamlessly
+          mkdir -p "$ANDROID_SDK_DIR/licenses"
+          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_SDK_DIR/licenses/android-sdk-license"
+          printf "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_SDK_DIR/licenses/android-sdk-preview-license"
 
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
@@ -46,18 +61,22 @@ jobs:
             echo "GEMINI_API_KEY=$GH_GEMINI_KEY" > .env
           fi
 
-      - name: Generate Debug Keystore if missing
+      - name: Prepare Debug Keystore
         run: |
           if [ ! -f debug.keystore ]; then
-            keytool -genkeypair -v \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
+            if [ -f debug.keystore.base64 ]; then
+              base64 -d debug.keystore.base64 > debug.keystore
+            else
+              keytool -genkeypair -v \
+                -keystore debug.keystore \
+                -storepass android \
+                -alias androiddebugkey \
+                -keypass android \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -dname "CN=Android Debug,O=Android,C=US"
+            fi
           fi
 
       - name: Run Unit & Robolectric Integration Tests
